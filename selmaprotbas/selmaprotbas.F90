@@ -404,7 +404,7 @@ end function gradual_switch
    anmx = recs * self%mbnnrate * nnb_gswitch * gradual_switch(aab,0.001_rk) * (1.0_rk-oxb_gswitch)*(1.0_rk - self%den_frac_denanmx_sed) ! Anammox rate depends on nitrate, ammonium and fraction of denitrification+anammox
    ldn_S = recs * self%mbsrate * (1.0_rk - nnb_gswitch) * (1.0_rk-oxb_switch)        ! Mineralization rate by sulphate. starts a bit before nitrate is depleted
    recs_all = recs * oxb_switch + ldn_N + anmx + ldn_S ! Mineralization rate depends on temperature and on electron accepteor (O2,NO3,SO4).
-   ldn_O = recs * oxb_switch * (1.0_rk + (self%fds * 3.0_rk - 2.4 * self%den_frac_denanmx_sed) + ldn_S    ! Oxygen loss (or sulphate loss into h2s) due to mineralization 
+   ldn_O = recs * oxb_switch * (1.0_rk + self%fds * (3.0_rk - 2.4 * self%den_frac_denanmx_sed)) + ldn_S    ! Oxygen loss (or sulphate loss into h2s) due to mineralization 
 	
    pret = self%po4ret  * oxb_switch             ! phosphate is stored with oxygen
    plib = self%pliberationrate * (1.0_rk-oxb_switch) ! phosphorus is liberated on anoxic condition

@@ -62,8 +62,9 @@
 !  2025, by Shajar Regev (IOLR):
 !  - Option to use anammox and sulphate-based mineralisation
 !  2026, by Jorrit Mesman and Shajar Regev (v1.2):
-!  - New reaeration option (newflux=3)
+!  - New oxygen saturation and reaeration options and possibility to set these independently from each other
 !  - Changes to make biogeochemistry module fully in line with tracking N, P, and C separately
+!  - Phytoplankton nutrient limitation present in output
 !
 ! !MODULE: selmaprotbas
 !
@@ -85,7 +86,7 @@
       type (type_state_variable_id)        :: id_dd_c,id_dd_p,id_dd_n,id_dd_si,id_aa,id_nn,id_po,id_o2,id_pw,id_dic,id_si
       type (type_bottom_state_variable_id) :: id_fl_c,id_fl_p,id_fl_n,id_fl_si,id_pb
       type (type_dependency_id)            :: id_temp,id_salt
-      type (type_horizontal_dependency_id) :: id_taub,id_wind
+      type (type_horizontal_dependency_id) :: id_taub,id_wind,id_ppao
       type (type_diagnostic_variable_id)   :: id_DNP,id_ANMP,id_NO3_mg,id_NH4_mg,id_PO4_mg,id_O2_mg,id_H2S_mg,id_Si_mg,id_dd_C2P,id_dd_N2P
       type (type_horizontal_diagnostic_variable_id) :: id_DNB,id_ANMB,id_SBR,id_PBR,id_OFL,id_NBR,id_fln_MBO,id_fln_MBN,id_fln_MBS,id_fluf_C2P, id_fluf_N2P
 
@@ -93,9 +94,9 @@
       real(rk) :: nb,deltao,nue,sigma_b,dn,dn_sed
       real(rk) :: q10_rec,ade_r0,alphaade,q10_recs,mbsrate,mbnnrate,den_frac_denanmx,den_frac_denanmx_sed
       real(rk) :: sedrate,erorate,sedratepo4,eroratepo4,po4ret,nitrif_rate
-      real(rk) :: fl_burialrate,pburialrate,pliberationrate,ipo4th,br0,fds,pvel,tau_crit
-      integer  :: newflux
-      character(len=16) :: env_type, mbn_stoi ! env_type is identifier for setting the environment to "marine" or "fresh" (fresh disables mineralization with sulphate)
+      real(rk) :: fl_burialrate,pburialrate,pliberationrate,ipo4th,br0,fds,pvel,tau_crit,elevation
+      integer  :: o2sat_method,o2corr_method,o2pvel_method
+      character(len=16) :: env_type ! env_type is identifier for setting the environment to "marine" or "fresh" (fresh disables mineralization with sulphate)
       logical  :: diagnostics
    contains
       procedure :: initialize
@@ -164,8 +165,11 @@ end function gradual_switch
    call self%get_parameter(self%ipo4th, 'ipo4th', 'mmol P/m2', 'maximum phosphorus density available for burial', default=100._rk)
    call self%get_parameter(self%br0, 'br0', '1/d', 'bioresuspension rate', default=0.03_rk, scale_factor=1.0_rk/secs_per_day)
    call self%get_parameter(self%fds, 'fds', '-', 'fraction of sediment remineralization fueled by denitrification', default=0.7_rk)
-   call self%get_parameter(self%pvel, 'pvel', 'm/d', 'piston velocity, only used if newflux=2 or 4', default=5._rk, scale_factor=1.0_rk/secs_per_day)
-   call self%get_parameter(self%newflux, 'newflux', '-', 'oxygen flux type (1=wind-based and Weiss saturation; 2=pvel parameter; 3=Cole and Caraco, Weiss, and Wanninkhof; 4=seawater temperature only)', default=2)
+   call self%get_parameter(self%o2sat_method, 'o2sat_method', '-', 'method to calculate oxygen saturation concentration (1=Weiss; 2=Helcom polynomial; 3=seawater temperature only)', default=1)
+   call self%get_parameter(self%o2corr_method, 'o2corr_method', '-', 'correct oxygen saturation for pressure (0=not used; 1=elevation-based; 2=pressure-based)', default=0)
+   call self%get_parameter(self%o2pvel_method, 'o2pvel_method', '-', 'method to calculate piston velocity (1=user-defined parameter; 2=Liss & Merlivat; 3=Cole & Caroco, fresh; 4=Cole & Caroco, salt; 5=iHAMOCC model)', default=2)
+   call self%get_parameter(self%pvel, 'pvel', 'm/d', 'piston velocity, only used if o2pvel_method=1', default=5._rk, scale_factor=1.0_rk/secs_per_day)
+   call self%get_parameter(self%elevation, 'elevation', 'm.a.s.l.', 'elevation of the surface in meters above sea level, only used if o2corr_method=1', default=0.0_rk)
    call self%get_parameter(self%diagnostics, 'diagnostics', '-', 'toggle diagnostic output', default=.false.)
    
    ! Register state variables
@@ -189,7 +193,7 @@ end function gradual_switch
    call self%register_state_variable(self%id_fl_si,'fl_si','mmol Si/m2', 'silicate fluff', minimum=0.0_rk)
    call self%register_state_variable(self%id_pb,'pb','mmol P/m2', 'PFe_s', minimum=0.0_rk)
    call self%register_state_variable(self%id_pw,'pw','mmol P/m3', 'PFe_w', minimum=0.0_rk,vertical_movement=wpo4/secs_per_day,no_river_dilution=.true.)
-     
+   
    ! Register link to external DIC pool, if DIC variable name is provided in namelist.
    call self%register_state_dependency(self%id_dic,standard_variables%mole_concentration_of_dissolved_inorganic_carbon, required=.false.)
 
@@ -240,7 +244,10 @@ end function gradual_switch
    call self%register_dependency(self%id_salt, standard_variables%practical_salinity)
    call self%register_dependency(self%id_wind, standard_variables%wind_speed)
    call self%register_dependency(self%id_taub, standard_variables%bottom_stress)
-
+   if (self%o2corr_method .eq. 2) then
+      call self%register_dependency(self%id_ppao, standard_variables%surface_air_pressure)
+   end if
+   
    END subroutine initialize
 !EOC
 
@@ -538,9 +545,13 @@ end function gradual_switch
   real(rk),parameter :: secs_per_hour = 3600._rk
 !
 ! !LOCAL VARIABLES:
-  real(rk)                 :: p_vel,sc,flo2,osat,schmidt
+  real(rk)                 :: p_vel,osat,schmidt,ppao
   real(rk),parameter       :: o2_molar_mass =  31.9988_rk ! molar mass of O2
-!  integer,parameter        :: newflux=2
+  real(rk),parameter       :: p1 = 1012_rk
+  real(rk),parameter       :: p2 = 1013_rk
+  real(rk),parameter       :: f = 0.12_rk
+  real(rk),parameter       :: atm2pa_selma = 101325._rk  ! 1 atm in Pascal
+  real(rk),parameter       :: Xconvxa_selma = 6.97e-7_rk  ! gas transfer velocity scaling (m/s per (m/s)^2) 
 !
 !EOP
 !-----------------------------------------------------------------------
@@ -553,63 +564,92 @@ end function gradual_switch
    _GET_HORIZONTAL_(self%id_wind,wnd)
 
    _GET_(self%id_o2,o2)
-
-!  Calculation of the surface oxygen flux
-! Newflux=1 piston velocity depends on winds and saturation is
-! calculated according to Weiss formula
-   if (self%newflux .eq. 1) then
-      sc=1450._rk+(1.1_rk*temp-71._rk)*temp
+   
+   ! Part 1: Calculate saturation concentration
+   if (self%o2sat_method .eq. 1) then
+      osat = osat_weiss(temp,salt)
+   elseif (self%o2sat_method .eq. 2) then
+      osat = (10.18e0_rk + ((5.306e-3_rk - 4.8725e-5_rk * temp) *temp - 0.2785e0_rk) * temp &
+          + salt * ((2.2258e-3_rk + (4.39e-7_rk * temp - 4.645e-5_rk) * temp) * temp - 6.33e-2_rk)) &
+          * 44.66e0_rk
+	  ! Source as written in original SELMA code: "use polynom approximation
+      ! to order S & T ** 3 for oxygen saturation derived from
+      ! www.helcom.fi/Monas/CombineManual2/PartB/AnnexB-8Appendix3.pdf". A polynomial derived from Weiss
+   elseif (self%o2sat_method .eq. 3) then
+      ! IMPORTANT: seawater only!
+	  ! Simplified linear dependency on temperature. In original ERGOM paper Neumann (2000)
+	  osat = 31.25_rk * (14.603_rk - 0.40215_rk * temp)
+   else
+	  print *, 'ERROR: Invalid option for o2sat_method, should be 1,2, or 3'
+	  stop
+   end if
+   
+   ! Part 2: Optional correction of osat for elevation or pressure
+   if (self%o2corr_method .eq. 1) then
+      ! Correct for elevation
+	  ! Source: The elevation correction is inherited from the correction term used in Marelac R package for oxygen saturation based on the "paul" method.
+      ! The "paul" method is based on Paul L, 1985. Das thermische Regime der Talsperre Saidenbach und einige Beziehungen zwischen abiotischen und biotischen Komponenten.  
+	  osat = osat * (p1 - f * self%elevation) / p2
+   elseif (self%o2corr_method .eq. 2) then
+      ! Correct for pressure (provided by host model)
+	  ! From the iHAMOCC model, see https://github.com/BoldingBruggeman/fabm-ihamocc
+	  _GET_HORIZONTAL_(self%id_ppao, ppao) ! surface air pressure in Pascal
+	  osat = osat * ppao / atm2pa_selma
+   end if
+   
+   ! Part 3: Piston velocity
+   if (self%o2pvel_method .eq. 1) then
+      ! Provide piston velocity as a (constant) parameter
+	  p_vel = self%pvel
+   elseif (self%o2pvel_method .eq. 2) then
+      ! Piston velocity depends on wind and temperature. 
+	  ! Source: Liss & Merlivat (1986, Air-sea exchange rates: introduction and synthesis, edited by: Buat-Menard, P., The role of air-sea exchange in geochemical cycling, Reidel, Dordrecht, 163–170)
+	  ! (referred to by Miladinova & Stips (2010, Sensitivity of oxygen dynamics in the water column of the Baltic Sea to external forcing. Ocean Science, 6(2), 461-474))
+	  schmidt=1450._rk+(1.1_rk*temp-71._rk)*temp
       if (wnd .gt. 13._rk) then
-         p_vel = 5.9_rk*(5.9_rk*wnd-49.3_rk)/sqrt(sc)
+         p_vel = 5.9_rk*(5.9_rk*wnd-49.3_rk)/sqrt(schmidt)
       else
          if (wnd .lt. 3.6_rk) then
-            p_vel = 1.003_rk*wnd/(sc)**(0.66_rk)
+            p_vel = 1.003_rk*wnd/(schmidt)**(0.66_rk)
          else
-            p_vel = 5.9_rk*(2.85_rk*wnd-9.65_rk)/sqrt(sc)
+            p_vel = 5.9_rk*(2.85_rk*wnd-9.65_rk)/sqrt(schmidt)
          end if
       end if
       if (p_vel .lt. 0.05_rk) then
           p_vel = 0.05_rk
       end if
       p_vel = p_vel/secs_per_day
-      flo2 =p_vel*(osat_weiss(temp,salt)-o2)
-      _SET_SURFACE_EXCHANGE_(self%id_o2,flo2)
-! Newflux=2 use polynom approximation
-! to order S & T ** 3 for oxygen saturation derived from
-! www.helcom.fi/Monas/CombineManual2/PartB/AnnexB-8Appendix3.pdf
-   elseif (self%newflux .eq. 2) then
-      osat = (10.18e0_rk + ((5.306e-3_rk - 4.8725e-5_rk * temp) *temp - 0.2785e0_rk) * temp &
-          + salt * ((2.2258e-3_rk + (4.39e-7_rk * temp - 4.645e-5_rk) * temp) * temp - 6.33e-2_rk)) &
-          * 44.66e0_rk
-      flo2 = self%pvel * (osat - o2)
-      _SET_SURFACE_EXCHANGE_(self%id_o2,flo2)
-   elseif (self%newflux .eq. 3) then
-      ! Use Weiss formula for oxygen saturation
-	  osat = osat_weiss(temp,salt)
-	  
-	  ! Schmidt number for O2 based on Wanninkhof (1992, Journ. of Geophys. Res.) differs between fresh- and seawater
-	  if (self%env_type .eq. "fresh") then
-         schmidt = 1800.6_rk - 120.1_rk * temp + 3.7818_rk * temp**2_rk + 0.047608_rk * temp**3_rk
-      else
-         schmidt = 1953.4_rk - 128.0_rk * temp + 3.9918_rk * temp**2_rk + 0.050091_rk * temp**3_rk
-      end if
-	  
+   elseif (self%o2pvel_method .eq. 3) then
+      ! Schmidt number for O2 based on Wanninkhof (1992, Journ. of Geophys. Res.), for freshwater
+	  schmidt = 1800.6_rk - 120.1_rk * temp + 3.7818_rk * temp**2_rk + 0.047608_rk * temp**3_rk
 	  ! Exchange based on Cole & Caroco (1998, L&O) following Staehr et al. (2010, L&O Methods)
 	  p_vel = ((2.07_rk + 0.215_rk * wnd**1.7_rk) / 100_rk * (schmidt/600.0_rk)**(-0.5_rk)) ! in m/h
 	  p_vel = p_vel / secs_per_hour
-	  flo2 = p_vel * (osat - o2)
-	  _SET_SURFACE_EXCHANGE_(self%id_o2,flo2)
-   elseif (self%newflux .eq. 4) then
-      ! Seawater only
-	  flo2 = self%pvel * (31.25_rk * (14.603_rk - 0.40215_rk * temp) - o2)
-      _SET_SURFACE_EXCHANGE_(self%id_o2,flo2)
+   elseif (self%o2pvel_method .eq. 4) then
+      ! Schmidt number for O2 based on Wanninkhof (1992, Journ. of Geophys. Res.), for saltwater
+	  schmidt = 1953.4_rk - 128.0_rk * temp + 3.9918_rk * temp**2_rk + 0.050091_rk * temp**3_rk
+	  ! Exchange based on Cole & Caroco (1998, L&O) following Staehr et al. (2010, L&O Methods)
+	  p_vel = ((2.07_rk + 0.215_rk * wnd**1.7_rk) / 100_rk * (schmidt/600.0_rk)**(-0.5_rk)) ! in m/h
+	  p_vel = p_vel / secs_per_hour
+   elseif (self%o2pvel_method .eq. 5) then
+      ! iHAMOCC-style flux: Wanninkhof (2014), Table 1, Schmidt number
+	  schmidt = 1920.4_rk   &
+              - 135.6_rk  * temp &
+              +   5.2122_rk * temp**2.0_rk &
+              -   0.10939_rk * temp**3.0_rk &
+              +   0.00093777_rk * temp**4.0_rk
+	  ! Ice-cover effect in iHAMOCC not used
+	  p_vel = Xconvxa_selma * wnd**2.0_rk * (660.0_rk / schmidt)**0.5_rk
    else
-	  print *, 'ERROR: Invalid option for newflux, should be 1,2,3, or 4'
+	  print *, 'ERROR: Invalid option for o2pvel_method, should be between 1 and 5'
 	  stop
    end if
-
-   _SET_HORIZONTAL_DIAGNOSTIC_(self%id_OFL,flo2 * o2_molar_mass * secs_per_day)
-
+   
+   ! Set exchange rate
+   _SET_SURFACE_EXCHANGE_(self%id_o2, p_vel * (osat - o2))
+   
+   _SET_HORIZONTAL_DIAGNOSTIC_(self%id_OFL, p_vel * (osat - o2) * o2_molar_mass * secs_per_day)
+   
    _HORIZONTAL_LOOP_END_
 
    end subroutine do_surface

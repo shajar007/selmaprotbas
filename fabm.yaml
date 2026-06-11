@@ -28,8 +28,11 @@ instances:
       ipo4th: 100.0                      # maximum phosphorus density available for burial (mmol P/m2), default = 100.0
       br0: 0.03                          # bioresuspension rate (1/d), default = 0.03
       fds: 0.7                           # fraction of sediment remineralization fueled by denitrification (-), default = 0.7
-      pvel: 5.0                          # piston velocity, only used if newflux=2 or 4 (m/d), default = 5.0
-      newflux: 2                         # oxygen flux type (1=wind-based and Weiss saturation; 2=pvel parameter; 3=Cole and Caraco, Weiss, and Wanninkhof; 4=seawater temperature only), default = 2
+      o2sat_method: 1                    # method to calculate oxygen saturation concentration (1=Weiss; 2=Helcom polynomial; 3=seawater temperature only), default = 1
+      o2corr_method: 0                   # correct oxygen saturation for pressure (0=not used; 1=elevation-based; 2=pressure-based), default = 0
+      o2pvel_method: 2                   # method to calculate piston velocity (1=user-defined parameter; 2=Liss & Merlivat; 3=Cole & Caroco, fresh; 4=Cole & Caroco, salt; 5=iHAMOCC model), default = 2
+      pvel: 5.0                          # piston velocity, only used if o2pvel_method=1 (m/d), default = 5.0
+      elevation: 0.0                     # elevation of the surface in meters above sea level, only used if o2corr_method=1 (m.a.s.l), default = 0.0
       diagnostics: false                 # toggle diagnostic output, default = false
     initialization:
       nn: 3.5                            # nitrate (mmol N/m3)

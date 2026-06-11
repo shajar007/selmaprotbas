@@ -29,7 +29,7 @@ All parameters can be accessed in text (YAML) format.
 ### What was changed from the SELMA model?
 #### v1.2
 - Biogeochemical model update, which is better representative of the individual tracking of N, P, and C
-- Option to use Cole and Caraco reaeration dynamics
+- Option different reaeration and o2 saturation dynamics, and correct for pressure or altitude
 - Bug fix to zooplankton nutrient mass balance
 #### v1.1
 - A DOM module was added, based on the DOMCAST model.
